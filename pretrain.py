@@ -60,13 +60,10 @@ def activate(X, params, a):
 
 def grad(X, Y, params, grads, aux):
 
-    err = 0.0
-    batch_size = X.shape[0]
-
     H, bh, bo = params
     _H, _bh, _bo = grads
 
-    a, z, eh, eo, loss = aux
+    a, z, eh, eo, loss, ones = aux
 
     _H.assign(0.0)
     _bh.assign(0.0)
@@ -80,7 +77,6 @@ def grad(X, Y, params, grads, aux):
 
     X.dot(H, target=a)
     a.add_row_vec(bh)
-    #cm.tanh(a)         # check this
     cm.sigmoid(a)
 
     # b = sigm( a*H_prime + bo )
@@ -97,10 +93,6 @@ def grad(X, Y, params, grads, aux):
 
     # eh = tanh'(a) x ( eo * H_prime )
     eo.dot(H, target = eh)
-
-    #eh.apply_tanh_deriv(a)
-    #eh.mult(2.0)            # there is probably bug in the 'apply_tanh_deriv'
-
     eh.apply_logistic_deriv(a)
 
     ### COMPUTE GRADIENTS ###
@@ -113,10 +105,7 @@ def grad(X, Y, params, grads, aux):
 
     ### COMPUTE ERROR ###
     cm.cross_entropy_bernoulli(Y, z, target=loss)
-
-    cs = loss.sum(axis=0)
-    rs = cs.sum(axis=1)
-    err = np.sum(rs.asarray())
+    err = loss.sum()
 
     return err
 
@@ -213,8 +202,9 @@ def pretrain(data, n_hidden, model=None, filename=None, act_file=None):
     eo = M(np.zeros((batch_size, n_out)))
 
     loss = M(np.zeros(Y.shape))
+    ones = np.ones((1,batch_size*n_out), dtype=np.float32)
 
-    aux = [a, z, eh, eo, loss]
+    aux = [a, z, eh, eo, loss, ones]
 
     ### TRAINING ###
 
@@ -275,7 +265,8 @@ if __name__ == '__main__':
     parser.add_argument('-b', '--batch_size', type=int, default=100, help='batch size')
     parser.add_argument('-x', '--hidden', type=int, default=100, help='number of hidden units')
     parser.add_argument('-e', '--epoch', type=int, default=10, help='number of epochs')
-    parser.add_argument('-c', '--continue_using_model', default='', help='continue with the model')
+    parser.add_argument('-c', '--continue', dest='cont',
+                action='store_true', default=False, help='continue with the model')
     parser.add_argument('-n', '--noise_rate', type=float, default=0.01, help='specify curruption rate')
 
     args = parser.parse_args()
@@ -290,19 +281,22 @@ if __name__ == '__main__':
 
     X = load_layer(args.filename)
 
+    # cudamat fix for large matrix summations
+    if cm.MAX_ONES < batch_size*X.shape[1]:
+        print "Warning: extending cudamat 'ones' size"
+        cm.MAX_ONES = batch_size*X.shape[1]
+
     cm.cublas_init()
 
     if DEBUG:
         _check_grad()
     else:
         prev_model = None
-        if args.continue_using_model:
+        if args.cont:
             print "Ignoring -x parameter"
-            prev_model = load_model(args.continue_using_model)
+            prev_model = load_model(args.out)
 
         model = pretrain(X, n_hidden, prev_model, args.out, act_file)
 
         print "Saving model to:", args.out
         save_model(model, args.out)
-
-

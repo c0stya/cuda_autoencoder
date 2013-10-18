@@ -42,7 +42,7 @@ if __name__ == '__main__':
     inp = sys.argv[1]
     out = sys.argv[2]
 
-    X,Y = get_dataset(filename=inp, limit=100000)
+    X,Y = get_dataset(filename=inp, limit=1000000)
 
     with open(out, 'wb') as h:
         np.save(h, [len(alph)])

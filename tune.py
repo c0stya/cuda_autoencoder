@@ -43,13 +43,11 @@ def predict(X, params):
 
     # a = f( x*H + bh )
 
-    a = X.dot(H)
+    a = X.dot(H)            # better to get 'a' as argument
     a.add_row_vec(bo)
     cm.sigmoid(a)
 
     y_pred = ((a.asarray() > 0.5).astype(int))
-
-    del a
 
     return y_pred
 
@@ -91,10 +89,7 @@ def grad(X, Y, params, grads, aux):
 
     ### COMPUTE ERROR ###
     cm.cross_entropy_bernoulli(Y, a, target=loss)
-
-    cs = loss.sum(axis=0)
-    rs = cs.sum(axis=1)
-    err = np.sum(rs.asarray())
+    err = loss.sum()
 
     return err
 
@@ -181,7 +176,8 @@ if __name__ == '__main__':
     parser.add_argument('-l', '--learning_rate', type=float, default=0.01, help='learning rate')
     parser.add_argument('-b', '--batch_size', type=int, default=100, help='batch size')
     parser.add_argument('-e', '--epoch', type=int, default=10, help='number of epochs')
-    parser.add_argument('-c', '--continue_using_model', default='', help='continue with the model')
+    parser.add_argument('-c', '--continue', dest='cont',
+                action='store_true', default=False, help='continue with the model')
     parser.add_argument('-n', '--noise_rate', type=float, default=0.01, help='specify curruption rate')
 
     args = parser.parse_args()
@@ -203,9 +199,9 @@ if __name__ == '__main__':
         _check_grad()
     else:
         prev_model = None
-        if args.continue_using_model:
+        if args.cont:
             print "Ignoring -x parameter"
-            prev_model = load_model(args.continue_using_model)
+            prev_model = load_model(args.out)
 
         model = train(X, Y, args.out)
 
