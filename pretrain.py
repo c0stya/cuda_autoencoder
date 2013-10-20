@@ -53,7 +53,6 @@ def activate(X, params, a):
 
     X.dot(H, target=a)
     a.add_row_vec(bh)
-    #cm.tanh(a)
     cm.sigmoid(a)
 
     return a
@@ -155,9 +154,10 @@ def _check_grad():
 
 
 def pretrain(data, n_hidden, model=None, filename=None, act_file=None):
+    valid_size = 1000
     n_items = data.shape[0]
     n_in = n_out = data.shape[1]
-    n_batches = n_items/batch_size
+    n_batches = n_items/batch_size # leave one for validation
 
     print "Pretraining, scale:", data.shape
 
@@ -206,6 +206,8 @@ def pretrain(data, n_hidden, model=None, filename=None, act_file=None):
 
     aux = [a, z, eh, eo, loss, ones]
 
+    X_val = M(data[(n_batches-1)*batch_size: n_batches*batch_size])
+
     ### TRAINING ###
 
     for epoch in range(n_epoch):
@@ -214,7 +216,7 @@ def pretrain(data, n_hidden, model=None, filename=None, act_file=None):
 
         t0 = time.clock()
 
-        for i in range(n_batches):
+        for i in range(n_batches-2):
             s = slice(i*batch_size, (i+1)*batch_size)
             X.overwrite(data[s])
 
@@ -230,8 +232,13 @@ def pretrain(data, n_hidden, model=None, filename=None, act_file=None):
 
             err.append(cost/(batch_size))
 
-        print "Epoch: %d, Loss: %.8f, Time: %.4fs" % (
-                    epoch, np.mean( err ), time.clock()-t0 )
+        # measure the reconstruction error
+        v_err = grad(X_val, X_val, params, grads, aux)
+
+        print "Epoch: %d, Loss: %.8f, VLoss: %.8f, Time: %.4fs" % (
+                    epoch, np.mean( err ),
+                    v_err/batch_size,
+                    time.clock()-t0 )
         if filename:
             save_model(params, filename)    # it's quite fast
 
