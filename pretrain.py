@@ -216,7 +216,7 @@ def pretrain(data, n_hidden, model=None, filename=None, act_file=None):
 
         t0 = time.clock()
 
-        for i in range(n_batches-2):
+        for i in range(n_batches-1):
             s = slice(i*batch_size, (i+1)*batch_size)
             X.overwrite(data[s])
 
