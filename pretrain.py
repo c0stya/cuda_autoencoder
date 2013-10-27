@@ -12,8 +12,6 @@ init_scale = 0.1
 batch_size = 1000
 noise_rate = 0.05
 
-DEBUG = False
-
 learning_rate = 0.01
 momentum = 0.9
 
@@ -57,12 +55,12 @@ def activate(X, params, a):
 
     return a
 
-def grad(X, Y, params, grads, aux):
+def grad(X, Y, act_type, rho, params, grads, aux):
 
     H, bh, bo = params
     _H, _bh, _bo = grads
 
-    a, z, eh, eo, loss, ones = aux
+    a, z, eh, eo, loss, s, s_m = aux
 
     _H.assign(0.0)
     _bh.assign(0.0)
@@ -82,7 +80,9 @@ def grad(X, Y, params, grads, aux):
 
     a.dot(H.T, target=z)
     z.add_row_vec(bo)
-    cm.sigmoid(z)
+
+    if act_type == 'logistic':
+        cm.sigmoid(z)          # DEBUG
 
     ### BACKWARD PASS ###
 
@@ -90,8 +90,22 @@ def grad(X, Y, params, grads, aux):
 
     z.subtract(Y, target=eo)
 
-    # eh = tanh'(a) x ( eo * H_prime )
-    eo.dot(H, target = eh)
+    # eh = sigmoid'(a) x ( eo * H_prime + (rho-1)/(s-1) - rho/s )
+
+    if rho > 0.00001:
+        a.reciprocal(target=s)
+        s.mult(rho)
+
+        a.subtract(1.0, target=s_m)
+        s_m.reciprocal()
+        s_m.mult(rho-1)
+        s.subtract(s_m)
+
+        eo.dot(H, target = eh)
+        eh.subtract(s)            # sparse penalty
+    else:
+        eo.dot(H, target = eh)
+
     eh.apply_logistic_deriv(a)
 
     ### COMPUTE GRADIENTS ###
@@ -103,57 +117,18 @@ def grad(X, Y, params, grads, aux):
     _bh.add_sums(eh, axis=0)
 
     ### COMPUTE ERROR ###
-    cm.cross_entropy_bernoulli(Y, z, target=loss)
+    if act_type == 'logistic':
+        cm.cross_entropy_bernoulli(Y, z, target=loss)
+    elif act_type == 'linear':
+        eo.mult(eo, target=loss) #loss.add_mult(eo, eo)   # DEBUG
+    else:
+        raise ValueError("Activation function '%s' is unknown" % args.act_type)
+
     err = loss.sum()
 
     return err
 
-def _check_grad():
-    batch_size = 5
-    n_hidden = 100
-    n_in = n_out = 20
-    EPS = 0.0001
-
-    H = np.random.uniform( -0.1, 0.1, size=(n_in, n_hidden))
-    bh = np.zeros((1,n_hidden))
-    bo = np.zeros((1,n_out))
-
-    eps = np.zeros_like(H)
-    eps[0,0] = EPS
-    H0 = H + eps
-    H1 = H - eps
-
-    H = M(H)
-    H0 = M(H0)
-    H1 = M(H1)
-    bh = M(bh)
-    bo = M(bo)
-    X = cm.empty((batch_size, n_in))
-
-    _H = M(np.zeros(H.shape))
-    _bh = M(np.zeros(bh.shape))
-    _bo = M(np.zeros(bo.shape))
-    grads = [_H, _bh, _bo]
-
-    X = M(np.random.binomial(1, 0.5, size=(batch_size,n_in)))
-
-    a = M(np.zeros((batch_size, n_hidden)))
-    z = cm.empty((batch_size, n_out))
-
-    eh = M(np.zeros((batch_size, n_hidden)))
-    eo = M(np.zeros((batch_size, n_out)))
-
-    aux = [a, z, eh, eo]
-
-    loss0 = grad(X, X, (H0, bh, bo), grads, aux)
-    loss1 = grad(X, X, (H1, bh, bo), grads, aux)
-
-    grad(X, X, (H, bh, bo), grads, aux)
-    print 'Grad:\t\t%.6f' % (_H.asarray()[0,0])
-    print 'Grad approx:\t%.6f, (%f, %f)' % ( (loss0 - loss1)/(2*EPS),  loss0, loss1)
-
-
-def pretrain(data, n_hidden, model=None, filename=None, act_file=None):
+def pretrain(data, n_hidden, args, model=None):
     valid_size = 1000
     n_items = data.shape[0]
     n_in = n_out = data.shape[1]
@@ -202,9 +177,12 @@ def pretrain(data, n_hidden, model=None, filename=None, act_file=None):
     eo = M(np.zeros((batch_size, n_out)))
 
     loss = M(np.zeros(Y.shape))
-    ones = np.ones((1,batch_size*n_out), dtype=np.float32)
 
-    aux = [a, z, eh, eo, loss, ones]
+    # terms for calculting sparse penalty
+    s = cm.empty(a.shape)
+    s_m = cm.empty(a.shape)
+
+    aux = [a, z, eh, eo, loss, s, s_m]
 
     X_val = M(data[(n_batches-1)*batch_size: n_batches*batch_size])
 
@@ -216,7 +194,7 @@ def pretrain(data, n_hidden, model=None, filename=None, act_file=None):
 
         t0 = time.clock()
 
-        for i in range(n_batches-1):
+        for i in range(n_batches-2):
             s = slice(i*batch_size, (i+1)*batch_size)
             X.overwrite(data[s])
 
@@ -224,7 +202,7 @@ def pretrain(data, n_hidden, model=None, filename=None, act_file=None):
             for g in grads:
                 g.mult(momentum)
 
-            cost = grad(X, X, params, grads, aux)
+            cost = grad(X, X, args.act_type, args.sparse, params, grads, aux)
 
             # update parameters 
             for p,g in zip(params, grads):
@@ -233,18 +211,18 @@ def pretrain(data, n_hidden, model=None, filename=None, act_file=None):
             err.append(cost/(batch_size))
 
         # measure the reconstruction error
-        v_err = grad(X_val, X_val, params, grads, aux)
+        v_err = grad(X_val, X_val, args.act_type, args.sparse, params, grads, aux)
 
         print "Epoch: %d, Loss: %.8f, VLoss: %.8f, Time: %.4fs" % (
                     epoch, np.mean( err ),
                     v_err/batch_size,
                     time.clock()-t0 )
-        if filename:
-            save_model(params, filename)    # it's quite fast
+        if args.out:
+            save_model(params, args.out)
 
     ### STORE ACTICATION VECTORS ### 
 
-    if act_file:
+    if args.activations:
         A = np.zeros((data.shape[0], n_hidden))
         for i in range(n_batches):
             s = slice(i*batch_size, (i+1)*batch_size)
@@ -252,9 +230,9 @@ def pretrain(data, n_hidden, model=None, filename=None, act_file=None):
             activate(X, params, a)
             A[s] = a.asarray()
 
-        with open(act_file, 'wb') as h:
+        with open(args.activations, 'wb') as h:
             print "Saving the activation vectors to: %s, shape: %s, %s " % \
-                    (act_file, A.shape[0], A.shape[1])
+                    (args.activations, A.shape[0], A.shape[1])
             np.save(h, A)
 
     return params
@@ -275,6 +253,8 @@ if __name__ == '__main__':
     parser.add_argument('-c', '--continue', dest='cont',
                 action='store_true', default=False, help='continue with the model')
     parser.add_argument('-n', '--noise_rate', type=float, default=0.01, help='specify curruption rate')
+    parser.add_argument('-t', '--act_type', default='linear', choices=['linear', 'logistic'], help='')
+    parser.add_argument('-s', '--sparse', type=float, default=0.0, help='add sparse penalty')
 
     args = parser.parse_args()
 
@@ -284,7 +264,6 @@ if __name__ == '__main__':
     n_hidden = args.hidden
     n_epoch = args.epoch
     noise_rate = args.noise_rate
-    act_file = args.activations
 
     X = load_layer(args.filename)
 
@@ -295,15 +274,13 @@ if __name__ == '__main__':
 
     cm.cublas_init()
 
-    if DEBUG:
-        _check_grad()
-    else:
-        prev_model = None
-        if args.cont:
-            print "Ignoring -x parameter"
-            prev_model = load_model(args.out)
+    prev_model = None
+    if args.cont:
+        print "Ignoring -x parameter"
+        prev_model = load_model(args.out)
 
-        model = pretrain(X, n_hidden, prev_model, args.out, act_file)
+    model = pretrain(X, n_hidden, args, prev_model)
 
-        print "Saving model to:", args.out
-        save_model(model, args.out)
+    print "Saving model to:", args.out
+    save_model(model, args.out)
+
