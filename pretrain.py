@@ -8,7 +8,7 @@ from utils import one_hot_dec, ALPH_rev
 
 n_epoch = 10
 n_hidden = 100
-init_scale = 0.1
+init_scale = 0.01
 batch_size = 1000
 noise_rate = 0.05
 

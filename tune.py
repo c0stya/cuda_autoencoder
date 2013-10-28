@@ -23,8 +23,6 @@ def load_layer(filename):
 
 def load_labels(filename):
     with open(filename, 'rb') as h:
-        alph = np.load(h)[0]
-        X = np.load(h)
         Y = np.load(h)
 
     Y.shape = (Y.shape[0], 1)
@@ -36,9 +34,7 @@ def save_model(model, filename):
             # load from GPU memory
             np.save(h, p.asarray())
 
-def grad(X, Y, params, grads, aux):
-
-    err = 0.0
+def grad(X, Y, act, out_act, params, grads, aux):
 
     H, bh = params
     _H, _bh = grads
@@ -52,7 +48,20 @@ def grad(X, Y, params, grads, aux):
         # a = sigmoid( ap*H + bh )
         a[i].dot(H[i], target = a[i+1])
         a[i+1].add_row_vec(bh[i])
-        cm.sigmoid(a[i+1])
+
+        if i < n_layers-1:
+            if act == 'logistic':
+                cm.sigmoid(a[i+1])
+        else:
+            # last layer
+            if act_out == 'logistic':
+                cm.sigmoid(a[i+1])
+            elif act_out == 'softmax':
+                a_t = a[i+1].transpose()
+                cm.softmax(a_t)
+                a_t.transpose(target=a[i+1])
+            else:
+                pass
 
     # backward pass
 
@@ -67,22 +76,22 @@ def grad(X, Y, params, grads, aux):
         _H[i].add_dot(a[i].T, eh[i])
         eh[i].sum(axis=0, target=_bh[i])
 
-        # compute error term for previous layer
+        # compute error term for the previous layer
         if i > 0:
             # eh = sigmoid'(a) x ( ehp*H' )
             eh[i].dot(H[i].T, target=eh[i-1])
             eh[i-1].apply_logistic_deriv(a[i])
 
-    loss = cm.cross_entropy(Y, a[n_layers])
-    err = loss.sum()
+    if out_act == 'logistic':
+        cm.cross_entropy_bernoulli(Y, a[n_layers], target=loss)
+    elif out_act == 'softmax':
+        loss = cm.cross_entropy(Y, a[n_layers], target=loss)
+    elif out_act == 'linear':
+        a[-1].mult(a[-1], target=loss)
 
-    # normalize error to be independent
-    # of batch size and training sample lenght
+    return loss.sum()
 
-    return err
-
-
-def train(x, y, model, filename=None):
+def train(x, y, model, args):
     n_items = x.shape[0]
 
     n_batches = n_items/batch_size
@@ -122,40 +131,45 @@ def train(x, y, model, filename=None):
     X = cm.empty((batch_size, n_in))
     Y = cm.empty((batch_size, n_out))
 
-    s = slice((n_batches-1)*batch_size, n_batches*batch_size)
-
-    x_val = M(x[s])
-    y_val = M(y[s])
+    x_val = M(x[0:batch_size])
+    y_val = M(y[0:batch_size])
 
     for epoch in range(n_epoch):
-        err = []
+        err = 0.0
         t0 = time.clock()
 
-        for i in range(n_batches-1):
+        v_err = grad(x_val, y_val,
+            args.act_middle, args.act_out,
+            params, grads, aux)
+
+        for i in range(1,n_batches):
             s = slice(i*batch_size, (i+1)*batch_size)
 
             X.overwrite(x[s])
             Y.overwrite(y[s])
 
             # apply momentum
+            '''
             for layer in grads:
                 for g in layer:
                     g.mult(momentum)
+            '''
 
-            loss = grad(X, Y, params, grads, aux)
+            lss = grad(X, Y,
+                args.act_middle, args.act_out,
+                params, grads, aux)
 
             # update parameters 
             for _p,_g in zip(params, grads):
                 for p,g in zip(_p,_g):
                     p.subtract_mult(g, mult=learning_rate/(batch_size))
 
-            err.append(loss/batch_size)
+            err.append(lss/batch_size)
 
-        v_err = grad(x_val, y_val, params, grads, aux)
 
         print "Epoch: %d, Loss: %.8f, VLoss: %.8f, Time: %.4fs" % (
                     epoch,
-                    np.mean( err ),
+                    np.mean(err),
                     v_err/batch_size,
                     time.clock()-t0 )
 
@@ -182,46 +196,37 @@ if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser()
 
-    parser.add_argument('-f', '--filename', default='corpus.bin', help='data file')
-    parser.add_argument('-d', '--datafile', required=True, help='data file')
-    parser.add_argument('-o', '--out', default='params.bin', help='file to store parameters')
+    parser.add_argument('-a', '--activations', required=True, help='data file')
+    parser.add_argument('-t', '--targets', required=True, help='data file')
     parser.add_argument('-m', '--momentum', type=float, default=0.9, help='momentum')
     parser.add_argument('-l', '--learning_rate', type=float, default=0.01, help='learning rate')
     parser.add_argument('-b', '--batch_size', type=int, default=100, help='batch size')
     parser.add_argument('-x', '--hidden', type=int, default=100, help='number of hidden units')
     parser.add_argument('-e', '--epoch', type=int, default=10, help='number of epochs')
-    parser.add_argument('-p', '--prev_model', default='', help='continue with the model')
-    parser.add_argument('-n', '--noise_rate', type=float, default=0.01, help='specify curruption rate')
+    parser.add_argument('-p', '--params', default='', help='continue with the model')
+    parser.add_argument('-am', '--act_middle', default='linear', choices=['linear', 'logistic'], help='')
+    parser.add_argument('-ao', '--act_out', default='linear', choices=['linear', 'logistic', 'softmax'], help='')
 
     args = parser.parse_args()
 
-    model = load_params(args.out)
+    model = load_params(args.params)
 
     momentum = args.momentum
     learning_rate = args.learning_rate
     batch_size = args.batch_size
     n_epoch = args.epoch
-    noise_rate = args.noise_rate
 
-    X = load_layer(args.filename)
-    Y = load_labels(args.datafile)
+    X = load_layer(args.activations)
+    Y = load_labels(args.targets)
 
     part = 1000 # size of the test part
 
     cm.cublas_init()
 
-    if DEBUG:
-        _check_grad()
-    else:
-        prev_model = None
-        '''
-        if args.cont:
-            print "Ignoring -x parameter"
-            prev_model = load_model(args.out)
-        '''
+    prev_model = None
 
-        model = train(X, Y, model, args.out)
+    model = train(X, Y, model, args)
 
-        print "Saving model to:", args.out
-        save_model(model, args.out)
+    # print "Saving model to:", args.out
+    # save_model(model, args.out)
 
