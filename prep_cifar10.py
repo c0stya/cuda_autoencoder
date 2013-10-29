@@ -1,25 +1,26 @@
 import cPickle
 import numpy as np
 
+cdir = './cifar-10-batches-py/'
+
 def one_hot_enc(x):
     x_shape = len(x)
-    y = np.zeros((x_shape, np.max(x)+1)).astype(dtype=np.int8)
+    y = np.zeros((x_shape, np.max(x)+1)).astype(np.int8)
     for i in range(x_shape):
         y[i,x[i]] = 1
     return y
 
-
 if __name__ == '__main__':
-    with open('data_batch_1','rb') as h:
+    with open(cdir + 'data_batch_1','rb') as h:
         b1 = cPickle.load(h)
         one_hot_enc(b1['labels'])
-    with open('data_batch_2','rb') as h:
+    with open(cdir + 'data_batch_2','rb') as h:
         b2 = cPickle.load(h)
-    with open('data_batch_3','rb') as h:
+    with open(cdir + 'data_batch_3','rb') as h:
         b3 = cPickle.load(h)
-    with open('data_batch_4','rb') as h:
+    with open(cdir + 'data_batch_4','rb') as h:
         b4 = cPickle.load(h)
-    with open('data_batch_5','rb') as h:
+    with open(cdir + 'data_batch_5','rb') as h:
         b5 = cPickle.load(h)
 
     data = np.vstack([
@@ -30,7 +31,7 @@ if __name__ == '__main__':
         b5['data']
     ])
 
-    labels = np.vstack([
+    labels = np.concatenate([
         b1['labels'],
         b2['labels'],
         b3['labels'],

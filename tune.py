@@ -1,10 +1,7 @@
 import numpy as np
 import cudamat as cm
-import time
-
 from cudamat import CUDAMatrix as M
-
-from utils import one_hot_dec, ALPH_rev
+import time
 
 n_epoch = 10
 n_hidden = 100
@@ -16,29 +13,28 @@ momentum = 0.9
 
 DEBUG=False
 
-def load_layer(filename):
+def load_activations(filename):
     with open(filename) as h:
         X = np.load(h)
     return X
 
-def load_labels(filename):
+def load_targets(filename):
     with open(filename, 'rb') as h:
         Y = np.load(h)
-
-    Y.shape = (Y.shape[0], 1)
     return Y
 
 def save_model(model, filename):
     with open(filename, 'wb') as h:
-        for p in model:
+        for layers in model:
             # load from GPU memory
-            np.save(h, p.asarray())
+            for p in layers: 
+                np.save(h, p.asarray())
 
-def grad(X, Y, act, out_act, params, grads, aux):
+def grad(X, Y, act, params, grads, aux):
 
     H, bh = params
     _H, _bh = grads
-    a, eh = aux
+    a, eh, loss = aux
 
     # forward pass
     a[0].assign(X)
@@ -50,16 +46,17 @@ def grad(X, Y, act, out_act, params, grads, aux):
         a[i+1].add_row_vec(bh[i])
 
         if i < n_layers-1:
-            if act == 'logistic':
-                cm.sigmoid(a[i+1])
+            cm.sigmoid(a[i+1])
         else:
             # last layer
-            if act_out == 'logistic':
+            if act == 'logistic':
                 cm.sigmoid(a[i+1])
-            elif act_out == 'softmax':
+            elif act == 'softmax':
+				# TODO: remove this redundand transpose  
                 a_t = a[i+1].transpose()
                 cm.softmax(a_t)
                 a_t.transpose(target=a[i+1])
+                a_t.free_device_memory()
             else:
                 pass
 
@@ -82,11 +79,11 @@ def grad(X, Y, act, out_act, params, grads, aux):
             eh[i].dot(H[i].T, target=eh[i-1])
             eh[i-1].apply_logistic_deriv(a[i])
 
-    if out_act == 'logistic':
+    if act == 'logistic':
         cm.cross_entropy_bernoulli(Y, a[n_layers], target=loss)
-    elif out_act == 'softmax':
+    elif act == 'softmax':
         loss = cm.cross_entropy(Y, a[n_layers], target=loss)
-    elif out_act == 'linear':
+    elif act == 'linear':
         a[-1].mult(a[-1], target=loss)
 
     return loss.sum()
@@ -123,10 +120,13 @@ def train(x, y, model, args):
     # last layer
     a.append(cm.empty((batch_size, n_out)))
 
-    # each parameter and gradient is a list
+    # loss
+    loss = M(np.zeros((batch_size, n_out)))
+
+    # each parameter and gradient is a list of vectors
     params = [H, bh]
     grads = [_H, _bh]
-    aux = [a, eh]
+    aux = [a, eh, loss]
 
     X = cm.empty((batch_size, n_in))
     Y = cm.empty((batch_size, n_out))
@@ -135,11 +135,10 @@ def train(x, y, model, args):
     y_val = M(y[0:batch_size])
 
     for epoch in range(n_epoch):
-        err = 0.0
+        err = [] 
         t0 = time.clock()
 
-        v_err = grad(x_val, y_val,
-            args.act_middle, args.act_out,
+        v_err = grad(x_val, y_val, args.act,
             params, grads, aux)
 
         for i in range(1,n_batches):
@@ -155,8 +154,7 @@ def train(x, y, model, args):
                     g.mult(momentum)
             '''
 
-            lss = grad(X, Y,
-                args.act_middle, args.act_out,
+            cost = grad(X, Y, args.act,
                 params, grads, aux)
 
             # update parameters 
@@ -164,7 +162,7 @@ def train(x, y, model, args):
                 for p,g in zip(_p,_g):
                     p.subtract_mult(g, mult=learning_rate/(batch_size))
 
-            err.append(lss/batch_size)
+            err.append(cost/batch_size)
 
 
         print "Epoch: %d, Loss: %.8f, VLoss: %.8f, Time: %.4fs" % (
@@ -198,14 +196,14 @@ if __name__ == '__main__':
 
     parser.add_argument('-a', '--activations', required=True, help='data file')
     parser.add_argument('-t', '--targets', required=True, help='data file')
-    parser.add_argument('-m', '--momentum', type=float, default=0.9, help='momentum')
+    parser.add_argument('-o', '--out_params', required=True, help='model parameters')
+    #parser.add_argument('-m', '--momentum', type=float, default=0.9, help='momentum')
     parser.add_argument('-l', '--learning_rate', type=float, default=0.01, help='learning rate')
     parser.add_argument('-b', '--batch_size', type=int, default=100, help='batch size')
     parser.add_argument('-x', '--hidden', type=int, default=100, help='number of hidden units')
     parser.add_argument('-e', '--epoch', type=int, default=10, help='number of epochs')
-    parser.add_argument('-p', '--params', default='', help='continue with the model')
-    parser.add_argument('-am', '--act_middle', default='linear', choices=['linear', 'logistic'], help='')
-    parser.add_argument('-ao', '--act_out', default='linear', choices=['linear', 'logistic', 'softmax'], help='')
+    parser.add_argument('-p', '--params', required=True, help='model parameters')
+    parser.add_argument('-ao', '--act', default='linear', choices=['linear', 'logistic', 'softmax'], help='')
 
     args = parser.parse_args()
 
@@ -216,17 +214,15 @@ if __name__ == '__main__':
     batch_size = args.batch_size
     n_epoch = args.epoch
 
-    X = load_layer(args.activations)
-    Y = load_labels(args.targets)
+    X = load_activations(args.activations)
+    Y = load_targets(args.targets)
 
     part = 1000 # size of the test part
 
     cm.cublas_init()
 
-    prev_model = None
-
     model = train(X, Y, model, args)
 
     # print "Saving model to:", args.out
-    # save_model(model, args.out)
+    save_model(model, args.out_params)
 
