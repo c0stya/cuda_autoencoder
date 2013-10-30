@@ -28,14 +28,6 @@ def load_model(filename='params.bin'):
 
     return [H,bh,bo]
 
-def add_noise(data, alph):
-    prob = [1-noise_rate] + [noise_rate/(alph-1)] * (alph-1)
-
-    noise = np.random.choice( np.arange(alph), data.shape, p=prob )
-    data = (data + noise) % alph
-
-    return data
-
 def save_model(model, filename):
     with open(filename, 'wb') as h:
         for p in model:
@@ -92,20 +84,25 @@ def grad(X, Y, act_type, rho, params, grads, aux):
 
     # eh = sigmoid'(a) x ( eo * H_prime + (rho-1)/(s-1) - rho/s )
 
-    if rho > 0.00001:
-        a.reciprocal(target=s)
-        s.mult(rho)
+    eo.dot(H, target = eh)
 
-        a.subtract(1.0, target=s_m)
+    # the following needs to be verified
+    if rho > 0:
+        a.sum(axis=0, target=s)
+        s.reciprocal()
+        s.mult(rho)
+        #a.reciprocal(target=s)
+
+        a.sum(axis=0, target=s_m)
+        s_m.subtract(1.0)
+        #a.subtract(1.0, target=s_m)
         s_m.reciprocal()
         s_m.mult(rho-1)
         s.subtract(s_m)
 
-        eo.dot(H, target = eh)
-        eh.subtract(s)            # sparse penalty
-    else:
-        eo.dot(H, target = eh)
-
+        #eh.subtract(s)            # sparse penalty
+        eh.add_row_mult(s, -1)
+    
     eh.apply_logistic_deriv(a)
 
     ### COMPUTE GRADIENTS ###
@@ -129,7 +126,6 @@ def grad(X, Y, act_type, rho, params, grads, aux):
     return err
 
 def pretrain(data, n_hidden, args, model=None):
-    valid_size = 1000
     n_items = data.shape[0]
     n_in = n_out = data.shape[1]
     n_batches = n_items/batch_size # leave one for validation
@@ -179,10 +175,14 @@ def pretrain(data, n_hidden, args, model=None):
     loss = M(np.zeros(Y.shape))
 
     # terms for calculting sparse penalty
-    s = cm.empty(a.shape)
-    s_m = cm.empty(a.shape)
+    s = cm.empty((1, n_hidden))
+    s_m = cm.empty((1, n_hidden))
 
     aux = [a, z, eh, eo, loss, s, s_m]
+
+    # whiten, DEBUG!
+    # from scipy.cluster.vq import whiten 
+    # data = whiten(data)
 
     X_val = M(data[(n_batches-1)*batch_size: n_batches*batch_size])
 
@@ -194,9 +194,15 @@ def pretrain(data, n_hidden, args, model=None):
 
         t0 = time.clock()
 
-        for i in range(n_batches-2):
+        for i in range(n_batches-1):
             s = slice(i*batch_size, (i+1)*batch_size)
             X.overwrite(data[s])
+
+            if args.noise_rate > 0:
+                Y.overwrite(data[s])
+                Y.dropout(args.noise_rate)
+            else:
+                Y = X
 
             # apply momentum
             for g in grads:
@@ -252,7 +258,7 @@ if __name__ == '__main__':
     parser.add_argument('-e', '--epoch', type=int, default=10, help='number of epochs')
     parser.add_argument('-c', '--continue', dest='cont',
                 action='store_true', default=False, help='continue with the model')
-    parser.add_argument('-n', '--noise_rate', type=float, default=0.01, help='specify curruption rate')
+    parser.add_argument('-n', '--noise_rate', type=float, default=0.0, help='specify curruption rate')
     parser.add_argument('-t', '--act_type', default='linear', choices=['linear', 'logistic'], help='')
     parser.add_argument('-s', '--sparse', type=float, default=0.0, help='add sparse penalty')
 
@@ -273,11 +279,14 @@ if __name__ == '__main__':
         cm.MAX_ONES = batch_size*X.shape[1]
 
     cm.cublas_init()
+    M.init_random()
 
     prev_model = None
     if args.cont:
         print "Ignoring -x parameter"
         prev_model = load_model(args.out)
+
+    M.init_random()
 
     model = pretrain(X, n_hidden, args, prev_model)
 

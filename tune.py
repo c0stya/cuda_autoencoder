@@ -24,15 +24,15 @@ def load_targets(filename):
     return Y
 
 def save_model(model, filename):
-    with open(filename, 'wb') as handl:
+    with open(filename, 'wb') as handle:
         H, bh = model
         _H, _bh = [], []
 
         for p0,p1 in zip(H, bh):
-            _H.append(p0.asarray)
-            _bh.append(p1.asarray)
+            _H.append(p0.asarray())
+            _bh.append(p1.asarray())
 
-        cPickle.dump(handl, model)
+        cPickle.dump((_H,_bh), handle)
 
 def grad(X, Y, act, params, grads, aux):
 
@@ -151,11 +151,9 @@ def train(x, y, model, args):
             Y.overwrite(y[s])
 
             # apply momentum
-            '''
             for layer in grads:
                 for g in layer:
                     g.mult(momentum)
-            '''
 
             cost = grad(X, Y, args.act_out,
                 params, grads, aux)
@@ -174,8 +172,8 @@ def train(x, y, model, args):
                     v_err/batch_size,
                     time.clock()-t0 )
 
-        #if filename:
-        #   save_model(params, filename)
+        if args.out_params:
+            save_model(params, args.out_params)
 
     return params
 
