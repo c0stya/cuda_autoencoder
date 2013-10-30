@@ -1,10 +1,7 @@
 import numpy as np
 import cudamat as cm
 import time
-
 from cudamat import CUDAMatrix as M
-
-from utils import one_hot_dec, ALPH_rev
 
 n_epoch = 10
 n_hidden = 100
@@ -23,10 +20,11 @@ def load_layer(filename):
 def load_model(filename='params.bin'):
     with open(filename, 'rb') as h:
         H = np.load(h)
+        O = np.load(h)      # use untying weights
         bh = np.load(h)
         bo = np.load(h)
 
-    return [H,bh,bo]
+    return [H,O,bh,bo]
 
 def save_model(model, filename):
     with open(filename, 'wb') as h:
@@ -49,8 +47,8 @@ def activate(X, params, a):
 
 def grad(X, Y, act_type, rho, params, grads, aux):
 
-    H, bh, bo = params
-    _H, _bh, _bo = grads
+    H, O, bh, bo = params
+    _H, _O, _bh, _bo = grads
 
     a, z, eh, eo, loss, s, s_m = aux
 
@@ -68,9 +66,10 @@ def grad(X, Y, act_type, rho, params, grads, aux):
     a.add_row_vec(bh)
     cm.sigmoid(a)
 
-    # b = sigm( a*H_prime + bo )
+    # b = sigm( a*O + bo )
+    #a.dot(H.T, target=z)   # use tyied weights
 
-    a.dot(H.T, target=z)
+    a.dot(O, target=z)
     z.add_row_vec(bo)
 
     if act_type == 'logistic':
@@ -107,7 +106,7 @@ def grad(X, Y, act_type, rho, params, grads, aux):
 
     ### COMPUTE GRADIENTS ###
 
-    _H.add_dot(eo.T, a)
+    _O.add_dot(eo.T, a)
     _H.add_dot(X.T, eh)
 
     _bo.add_sums(eo, axis=0)
@@ -130,13 +129,11 @@ def pretrain(data, n_hidden, args, model=None):
     n_in = n_out = data.shape[1]
     n_batches = n_items/batch_size # leave one for validation
 
-    print "Pretraining, scale:", data.shape
-
     if model:
 
         # check model consistency with the current dataset
 
-        H,bh,bo = model
+        H,O,bh,bo = model
         assert (H.shape[0] == n_in), 'Input matrix shape mismatch'
         assert (H.shape[0] == n_out), 'Output matrix shape mismatch'
         assert (bo.shape[1] == n_out), 'Bias vector shape mismatch'
@@ -148,23 +145,26 @@ def pretrain(data, n_hidden, args, model=None):
         # initialize a new model
 
         H = np.random.normal( scale=init_scale, size=(n_in, n_hidden))
+        O = np.random.normal( scale=init_scale, size=(n_hidden, n_out))
         bh = np.zeros((1,n_hidden))
         bo = np.zeros((1,n_out))
 
     H = M(H)
+    O = M(O)
     bh = M(bh)
     bo = M(bo)
 
     X = cm.empty((batch_size, n_in))
     Y = cm.empty((batch_size, n_out))
 
-    params = [H, bh, bo]
+    params = [H, O, bh, bo]
 
     _H = M(np.zeros(H.shape))
+    _O = M(np.zeros(O.shape))
     _bh = M(np.zeros(bh.shape))
     _bo = M(np.zeros(bo.shape))
 
-    grads = [_H, _bh, _bo]
+    grads = [_H, _O, _bh, _bo]
 
     a = M(np.zeros((batch_size, n_hidden)))
     z = cm.empty((batch_size, n_out))
@@ -208,7 +208,7 @@ def pretrain(data, n_hidden, args, model=None):
             for g in grads:
                 g.mult(momentum)
 
-            cost = grad(X, X, args.act_type, args.sparse, params, grads, aux)
+            cost = grad(X, Y, args.act_type, args.sparse, params, grads, aux)
 
             # update parameters 
             for p,g in zip(params, grads):
@@ -258,7 +258,7 @@ if __name__ == '__main__':
     parser.add_argument('-e', '--epoch', type=int, default=10, help='number of epochs')
     parser.add_argument('-c', '--continue', dest='cont',
                 action='store_true', default=False, help='continue with the model')
-    parser.add_argument('-n', '--noise_rate', type=float, default=0.0, help='specify curruption rate')
+    parser.add_argument('-n', '--noise_rate', type=float, default=0.0, help='specify the curruption rate')
     parser.add_argument('-t', '--act_type', default='linear', choices=['linear', 'logistic'], help='')
     parser.add_argument('-s', '--sparse', type=float, default=0.0, help='add sparse penalty')
 
