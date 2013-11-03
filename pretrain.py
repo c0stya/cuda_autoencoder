@@ -5,7 +5,7 @@ from cudamat import CUDAMatrix as M
 
 n_epoch = 10
 n_hidden = 100
-init_scale = 0.01
+init_scale = 1
 batch_size = 1000
 noise_rate = 0.05
 
@@ -35,7 +35,7 @@ def save_model(model, filename):
 def activate(X, params, a):
 
     batch_size = X.shape[0]
-    H, bh, bo = params
+    H, O, bh, bo = params
 
     # a = f( x*H + bh )
 
@@ -53,6 +53,7 @@ def grad(X, Y, act_type, rho, params, grads, aux):
     a, z, eh, eo, loss, s, s_m = aux
 
     _H.assign(0.0)
+    _O.assign(0.0)
     _bh.assign(0.0)
     _bo.assign(0.0)
 
@@ -81,32 +82,31 @@ def grad(X, Y, act_type, rho, params, grads, aux):
 
     z.subtract(Y, target=eo)
 
-    # eh = sigmoid'(a) x ( eo * H_prime + (rho-1)/(s-1) - rho/s )
+    # eh = sigmoid'(a) x ( eo * O + (rho-1)/(s-1) - rho/s )
 
-    eo.dot(H, target = eh)
+    eo.dot(O.T, target = eh)
 
     # the following needs to be verified
     if rho > 0:
         a.sum(axis=0, target=s)
+        s.mult(1.0/a.shape[0])        # normalize by batch_size
         s.reciprocal()
         s.mult(rho)
-        #a.reciprocal(target=s)
 
-        a.sum(axis=0, target=s_m)
+        a.sum(axis=0, target=s_m)   # TODO: remove this redundancy
+        s_m.mult(1.0/a.shape[0])        # normalize by batch_size
         s_m.subtract(1.0)
-        #a.subtract(1.0, target=s_m)
         s_m.reciprocal()
         s_m.mult(rho-1)
         s.subtract(s_m)
 
-        #eh.subtract(s)            # sparse penalty
-        eh.add_row_mult(s, -1)
+        eh.add_row_mult(s, -1.0)
     
     eh.apply_logistic_deriv(a)
 
     ### COMPUTE GRADIENTS ###
 
-    _O.add_dot(eo.T, a)
+    _O.add_dot(a.T, eo)
     _H.add_dot(X.T, eh)
 
     _bo.add_sums(eo, axis=0)
@@ -144,8 +144,11 @@ def pretrain(data, n_hidden, args, model=None):
 
         # initialize a new model
 
-        H = np.random.normal( scale=init_scale, size=(n_in, n_hidden))
-        O = np.random.normal( scale=init_scale, size=(n_hidden, n_out))
+        #H = np.random.normal( scale=init_scale, size=(n_in, n_hidden))
+        #O = np.random.normal( scale=init_scale, size=(n_hidden, n_out))
+        interv = np.sqrt(6.0/(n_in+n_out+1))
+        H = np.random.normal( -interv, interv, size=(n_in, n_hidden))
+        O = np.random.normal( -interv, interv, size=(n_hidden, n_out))
         bh = np.zeros((1,n_hidden))
         bo = np.zeros((1,n_out))
 
@@ -190,7 +193,6 @@ def pretrain(data, n_hidden, args, model=None):
 
     for epoch in range(n_epoch):
         err = []
-        upd = [0] * len(params)
 
         t0 = time.clock()
 
@@ -212,7 +214,10 @@ def pretrain(data, n_hidden, args, model=None):
 
             # update parameters 
             for p,g in zip(params, grads):
-                p.subtract_mult(g, mult=learning_rate/(batch_size))
+                print learning_rate
+                print batch_size
+                print learning_rate/batch_size
+                p.subtract_mult(g, mult=learning_rate) #/(batch_size))
 
             err.append(cost/(batch_size))
 
