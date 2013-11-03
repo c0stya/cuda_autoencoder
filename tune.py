@@ -183,6 +183,7 @@ def load_params(filename):
         while True:
             try:
                 H = np.load(h)
+                O = np.load(h)
                 bh = np.load(h)
                 bo = np.load(h)
                 params.append((H, bh))
