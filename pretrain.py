@@ -3,7 +3,14 @@ import cudamat as cm
 import time
 from cudamat import CUDAMatrix as M
 
-init_scale = 0.1
+n_epoch = 10
+n_hidden = 100
+init_scale = 1
+batch_size = 1000
+noise_rate = 0.05
+
+learning_rate = 0.01
+momentum = 0.9
 
 def load_layer(filename):
     with open(filename) as h:
@@ -54,19 +61,20 @@ def grad(X, Y, act_type, rho, params, grads, aux):
 
     ### FORWARD PASS ###
 
-    # a = sigmoid( x*H + bh )
+    # a = tanh( x*H + bh )
 
     X.dot(H, target=a)
     a.add_row_vec(bh)
     cm.sigmoid(a)
 
-    # b = sigmoid( a*O + bo )
-    a.dot(O, target=z)
+    # b = sigm( a*O + bo )
+    #a.dot(H.T, target=z)   # use tyied weights
 
+    a.dot(O, target=z)
     z.add_row_vec(bo)
 
     if act_type == 'logistic':
-        cm.sigmoid(z)
+        cm.sigmoid(z)          # DEBUG
 
     ### BACKWARD PASS ###
 
@@ -119,8 +127,6 @@ def grad(X, Y, act_type, rho, params, grads, aux):
 def pretrain(data, n_hidden, args, model=None):
     n_items = data.shape[0]
     n_in = n_out = data.shape[1]
-    learning_rate = args.learning_rate
-    batch_size = args.batch_size
     n_batches = n_items/batch_size # leave one for validation
 
     if model:
@@ -138,8 +144,11 @@ def pretrain(data, n_hidden, args, model=None):
 
         # initialize a new model
 
-        H = np.random.normal( scale=init_scale, size=(n_in, n_hidden))
-        O = np.random.normal( scale=init_scale, size=(n_hidden, n_out))
+        #H = np.random.normal( scale=init_scale, size=(n_in, n_hidden))
+        #O = np.random.normal( scale=init_scale, size=(n_hidden, n_out))
+        interv = np.sqrt(6.0/(n_in+n_out+1))
+        H = np.random.normal( -interv, interv, size=(n_in, n_hidden))
+        O = np.random.normal( -interv, interv, size=(n_hidden, n_out))
         bh = np.zeros((1,n_hidden))
         bo = np.zeros((1,n_out))
 
@@ -174,41 +183,40 @@ def pretrain(data, n_hidden, args, model=None):
 
     aux = [a, z, eh, eo, loss, s, s_m]
 
+    # whiten, DEBUG!
+    # from scipy.cluster.vq import whiten 
+    # data = whiten(data)
+
     X_val = M(data[(n_batches-1)*batch_size: n_batches*batch_size])
 
     ### TRAINING ###
 
-    for epoch in range(args.n_epoch):
+    for epoch in range(n_epoch):
         err = []
 
         t0 = time.clock()
 
-        '''
-        if args.noise_rate > 0:
-            H.dropout(args.noise_rate)
-        '''
-
-        for i in range(n_batches-2):
+        for i in range(n_batches-1):
             s = slice(i*batch_size, (i+1)*batch_size)
             X.overwrite(data[s])
 
             if args.noise_rate > 0:
                 Y.overwrite(data[s])
-                X.dropout(args.noise_rate)
+                Y.dropout(args.noise_rate)
             else:
                 Y = X
 
             # apply momentum
             for g in grads:
-                g.mult(args.momentum)
+                g.mult(momentum)
 
             cost = grad(X, Y, args.act_type, args.sparse, params, grads, aux)
 
             # update parameters 
             for p,g in zip(params, grads):
-                p.subtract_mult(g, mult=learning_rate/(batch_size))
+                p.subtract_mult(g, mult=learning_rate) #/(batch_size))
 
-            err.append(cost/batch_size)
+            err.append(cost/(batch_size))
 
         # measure the reconstruction error
         v_err = grad(X_val, X_val, args.act_type, args.sparse, params, grads, aux)
@@ -242,14 +250,14 @@ if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser()
 
-    parser.add_argument('-f', '--filename', required=True, help='data file')
+    parser.add_argument('-f', '--filename', default='corpus.bin', help='data file')
     parser.add_argument('-o', '--out', default='params.bin', help='file to store parameters')
     parser.add_argument('-a', '--activations', default=None, help='file to store activation vectors')
     parser.add_argument('-m', '--momentum', type=float, default=0.9, help='momentum')
     parser.add_argument('-l', '--learning_rate', type=float, default=0.01, help='learning rate')
     parser.add_argument('-b', '--batch_size', type=int, default=100, help='batch size')
     parser.add_argument('-x', '--hidden', type=int, default=100, help='number of hidden units')
-    parser.add_argument('-e', '--n_epoch', type=int, default=10, help='number of epochs')
+    parser.add_argument('-e', '--epoch', type=int, default=10, help='number of epochs')
     parser.add_argument('-c', '--continue', dest='cont',
                 action='store_true', default=False, help='continue with the model')
     parser.add_argument('-n', '--noise_rate', type=float, default=0.0, help='specify the curruption rate')
@@ -258,14 +266,19 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
+    momentum = args.momentum
+    learning_rate = args.learning_rate
+    batch_size = args.batch_size
     n_hidden = args.hidden
+    n_epoch = args.epoch
+    noise_rate = args.noise_rate
 
     X = load_layer(args.filename)
 
     # cudamat fix for large matrix summations
-    if cm.MAX_ONES < args.batch_size*X.shape[1]:
+    if cm.MAX_ONES < batch_size*X.shape[1]:
         print "Warning: extending cudamat 'ones' size"
-        cm.MAX_ONES = args.batch_size*X.shape[1]
+        cm.MAX_ONES = batch_size*X.shape[1]
 
     cm.cublas_init()
     M.init_random()
