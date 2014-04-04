@@ -23,6 +23,11 @@ def load_targets(filename):
         Y = np.load(h)
     return Y
 
+def load_model(filename):
+    with open(filename) as handler:
+        H, bh = cPickle.load(handler)
+    return (H, bh)
+
 def save_model(model, filename):
     with open(filename, 'wb') as handle:
         H, bh = model
@@ -91,22 +96,23 @@ def grad(X, Y, act, params, grads, aux):
 
     return loss.sum()
 
-def train(x, y, model, args):
+def train(x, y, model, prev, args):
     n_items = x.shape[0]
 
     n_batches = n_items/batch_size
 
-    H, bh, a, eh = [], [], [], []
-    _H, _bh = [], []
+    if not prev:
+        H, bh, a, eh = [], [], [], []
+        _H, _bh = [], []
 
-    n_in = x.shape[1]
-    n_out = y.shape[1]
+        n_in = x.shape[1]
+        n_out = y.shape[1]
 
-    lh, _ = model[-1]
-    l_H = np.random.normal( scale=0.1, size=(lh.shape[1], n_out))
-    l_bh = np.zeros((1,n_out))
+        lh, _ = model[-1]
+        l_H = np.random.normal( scale=0.1, size=(lh.shape[1], n_out))
+        l_bh = np.zeros((1,n_out))
 
-    model.append( (l_H, l_bh) )
+        model.append( (l_H, l_bh) )
 
     for p_H,p_bh in model:
         H.append(M(p_H))
@@ -206,10 +212,18 @@ if __name__ == '__main__':
     parser.add_argument('-e', '--epoch', type=int, default=10, help='number of epochs')
     parser.add_argument('-p', '--params', default='', help='continue with the model')
     parser.add_argument('-ao', '--act_out', default='linear', choices=['linear', 'logistic', 'softmax'], help='')
+    parser.add_argument('-c', '--continue', dest='cont',
+                action='store_true', default=False, help='continue with the model')
 
     args = parser.parse_args()
 
-    model = load_params(args.params)
+    prev = False        # marks that we need to create an additional layer
+    if args.cont:
+        print "Ignoring -x parameter"
+        model = load_model(args.out)
+        prev = True
+    else:
+        model = load_params(args.params)
 
     momentum = args.momentum
     learning_rate = args.learning_rate
@@ -221,7 +235,7 @@ if __name__ == '__main__':
 
     cm.cublas_init()
 
-    model = train(X, Y, model, args)
+    model = train(X, Y, model, prev, args)
 
     # print "Saving model to:", args.out
     save_model(model, args.out_params)
