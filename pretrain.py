@@ -144,11 +144,11 @@ def pretrain(data, n_hidden, args, model=None):
 
         # initialize a new model
 
-        #H = np.random.normal( scale=init_scale, size=(n_in, n_hidden))
-        #O = np.random.normal( scale=init_scale, size=(n_hidden, n_out))
-        interv = np.sqrt(6.0/(n_in+n_out+1))
-        H = np.random.normal( -interv, interv, size=(n_in, n_hidden))
-        O = np.random.normal( -interv, interv, size=(n_hidden, n_out))
+        H = np.random.normal( scale=init_scale, size=(n_in, n_hidden))
+        O = np.random.normal( scale=init_scale, size=(n_hidden, n_out))
+        #interv = np.sqrt(6.0/(n_in+n_out+1))
+        #H = np.random.normal( -interv, interv, size=(n_in, n_hidden))
+        #O = np.random.normal( -interv, interv, size=(n_hidden, n_out))
         bh = np.zeros((1,n_hidden))
         bo = np.zeros((1,n_out))
 
@@ -261,7 +261,7 @@ if __name__ == '__main__':
     parser.add_argument('-c', '--continue', dest='cont',
                 action='store_true', default=False, help='continue with the model')
     parser.add_argument('-n', '--noise_rate', type=float, default=0.0, help='specify the curruption rate')
-    parser.add_argument('-t', '--act_type', default='linear', choices=['linear', 'logistic'], help='')
+    parser.add_argument('-ah', '--act_type', default='linear', choices=['linear', 'logistic'], help='')
     parser.add_argument('-s', '--sparse', type=float, default=0.0, help='add sparse penalty')
 
     args = parser.parse_args()
